@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>変身プロトタイプ v0.2</title>
+<title>変身プロトタイプ v0.2.3</title>
 <!--
   変身プロトタイプ v0.2（スマホ・3人称・ミラー型）
   ① 構え：片腕を斜め上にまっすぐ伸ばす
@@ -44,7 +44,7 @@
   <button id="btnLog">ログ保存</button>
 </div>
 <div id="start">
-  <h1>変身プロトタイプ v0.2</h1>
+  <h1>変身プロトタイプ v0.2.3</h1>
   <p>スマホを立てて置き、腰まで映るように2〜3m離れて立ってね。<br>
      ① 片腕を斜め上にまっすぐ伸ばして「構え」<br>
      ②「変身！」と叫ぶ<br>
@@ -56,10 +56,11 @@
 <script type="module">
 import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
+const VERSION = "v0.2.3";
+
 // ===== 調整用パラメータ（実験しながらここを変える） =====
 const CFG = {
   HOLD_MS: 400,            // 構えをキープする時間
-  WINDOW_MS: 3000,         // 声と決めポーズの許容時間差（AND判定）
   READY_TIMEOUT_MS: 10000, // 構えのあと、この時間内に変身しないとリセット
   CHARGE_MS: 450,          // 光がベルトに集まる時間
   EFFECT_MS: 3000,         // 変身演出の長さ
@@ -72,6 +73,7 @@ const CFG = {
   BELT_CLOSE: 0.9,         // 決め：両手首の距離が「肩幅×0.9」より近い
   BELT_SIDE: 0.8,          // 決め：両手の位置が、腰の左右の端から「肩幅×0.8」以内
   KEYWORDS: ["変身", "へんしん", "ヘンシン", "返信", "変心"], // 音声認識が同じ読みの別の漢字にすることがあるため
+  MAX_ALTERNATIVES: 5,     // 音声認識の候補をいくつまで受け取るか（1番目が「返信」でも2番目以降に「変身」があれば通る）
   COLOR_A: [255, 200, 70],  // ゴールド
   COLOR_B: [255, 255, 255], // 白
 };
@@ -89,7 +91,7 @@ let landmarker = null, stream = null, facingMode = "user", mirror = true;
 let lm = null, P = null, lastVideoTime = -1, showSkel = true;
 let state = "IDLE", stateAt = 0, guardSince = 0, readyAt = 0, lastVoiceAt = -1e9, lastBeltAt = 0;
 let G = null, B = null, burst = false;
-let lastTranscript = "", voiceSupported = false, rec = null, actx = null;
+let lastTranscript = "", lastAlts = [], voiceSupported = false, rec = null, actx = null;
 let particles = [], ringAt = -1, ringCenter = null, lastFrame = performance.now();
 let fps = 0, fpsCount = 0, fpsAt = performance.now();
 const logs = [];
@@ -167,8 +169,8 @@ function update(now) {
     } else guardSince = 0;
   } else if (state === "READY") {
     if (B && B.ok) { if (!lastBeltAt) log("belt"); lastBeltAt = now; }
-    const voiceOk = lastVoiceAt > readyAt - 1500; // 構えの直前〜構えのあとに叫んだ声を有効にする
-    if (voiceOk && lastBeltAt && Math.abs(lastVoiceAt - lastBeltAt) < CFG.WINDOW_MS) trigger(now);
+    const voiceOk = lastVoiceAt > readyAt - 1500; // 構えの直前〜構えのあとに叫んだ声を有効にする（一度聞き取れば有効のまま）
+    if (voiceOk && lastBeltAt) trigger(now);       // 声と決めポーズの両方がそろったら発動（順番はどちらが先でもよい）
     else if (now - stateAt > CFG.READY_TIMEOUT_MS) { log("timeout"); guardSince = 0; setState("IDLE"); }
   } else if (state === "TRANSFORM") {
     if (!burst && now - stateAt > CFG.CHARGE_MS) startBurst(now);
@@ -176,6 +178,14 @@ function update(now) {
   } else if (state === "DONE") {
     if (now - stateAt > CFG.DONE_MS) { guardSince = 0; setState("IDLE"); }
   }
+}
+
+// 音声認識の候補（1番目〜）の中から、登録した言葉を探す。見つかった言葉と順位を返す
+function findKeyword(alts) {
+  for (let r = 0; r < alts.length; r++) {
+    for (const k of CFG.KEYWORDS) if (alts[r].includes(k)) return { word: k, rank: r + 1 };
+  }
+  return null;
 }
 
 function onVoice(src) {
@@ -367,7 +377,8 @@ function updateText(now) {
   const gText = G ? `腕の高さ${m(G.high)} 斜め${m(G.side)} 伸び${m(G.straight)}（${Math.round(G.deg)}°）` : "腕が見えていない";
   const bText = !B ? "手が見えていない" : B.noHip ? "腰が見えていない" : `両手の近さ${m(B.close)} 腰の高さ${m(B.height)} 横の位置${m(B.side)}`;
   const vText = voiceSupported ? (lastTranscript || "-") : "非対応（タップで代用）";
-  hud.textContent = `状態: ${state}\n構え: ${gText}\n決め: ${bText}\n声: ${vText}\nFPS: ${fps}`;
+  const aText = lastAlts.length > 1 ? lastAlts.slice(1, 4).map((a, i) => `${i + 2}番目 ${a}`).join(" / ") : "（候補は1つだけ）";
+  hud.textContent = `${VERSION}　状態: ${state}\n構え: ${gText}\n決め: ${bText}\n声: ${vText}\n候補: ${aText}\nFPS: ${fps}`;
   const voiceOk = lastVoiceAt > readyAt - 1500;
   if (!lm) guide.textContent = "腰まで映るように立ってね";
   else if (state === "IDLE") guide.textContent = "① 片腕を斜め上にまっすぐ伸ばして構えよう";
@@ -426,10 +437,15 @@ function startVoice() {
   if (!SR) { voiceSupported = false; return; }
   voiceSupported = true;
   rec = new SR(); rec.lang = "ja-JP"; rec.continuous = true; rec.interimResults = true;
+  rec.maxAlternatives = CFG.MAX_ALTERNATIVES; // 候補を複数受け取る
   rec.onresult = (e) => {
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript; lastTranscript = t;
-      if (CFG.KEYWORDS.some((k) => t.includes(k))) onVoice("speech");
+      const res = e.results[i];
+      const alts = Array.from(res).map((a) => a.transcript.trim()).filter(Boolean); // 1番目, 2番目, …の候補
+      lastAlts = alts; lastTranscript = alts[0] || "";
+      if (res.isFinal) log("heard", alts.join(" | ")); // 確定した候補をすべて記録（認識の確認用）
+      const hit = findKeyword(alts);
+      if (hit) onVoice(`${hit.word}@${hit.rank}`);     // 例：「変身@2」＝2番目の候補で「変身」が見つかった
     }
   };
   rec.onerror = (e) => { lastTranscript = "音声エラー: " + e.error; };
