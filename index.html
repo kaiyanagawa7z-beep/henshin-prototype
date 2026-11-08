@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>変身プロトタイプ v0.1</title>
+<title>変身プロトタイプ v0.2</title>
 <!--
-  変身プロトタイプ v0.1（スマホ・3人称・ミラー型）
-  - カメラで骨格を検出（MediaPipe Pose Landmarker）
-  - 構え → 「変身！」の声 ＋ 決めポーズ → エフェクト発動
-  - 声が使えない端末では「声の代わりにタップ」ボタンで代用
-  ※ポーズ・エフェクト・効果音はすべて仮のオリジナル。後でオリジナルヒーロー用に差し替える
+  変身プロトタイプ v0.2（スマホ・3人称・ミラー型）
+  ① 構え：片腕を斜め上にまっすぐ伸ばす
+  ②「変身！」と叫ぶ
+  ③ 決め：両手を腰の横（ベルトの横）に持ってくる
+  → 声と決めポーズがそろうと、光（金・白）のエフェクトが出る
+  ※エフェクト・効果音はプログラムで作ったオリジナル
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff;
@@ -17,7 +18,7 @@
   #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   video { display: none; }
   #hud { position: fixed; left: 8px; top: calc(8px + env(safe-area-inset-top, 0px)); font-size: 12px; line-height: 1.6;
-    background: rgba(0,0,0,.5); padding: 6px 10px; border-radius: 8px; white-space: pre; pointer-events: none; }
+    background: rgba(0,0,0,.55); padding: 6px 10px; border-radius: 8px; white-space: pre; pointer-events: none; }
   #guide { position: fixed; left: 12px; right: 12px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); text-align: center;
     font-size: 24px; font-weight: 800; text-shadow: 0 2px 10px #000, 0 0 2px #000; pointer-events: none; }
   #bar { position: fixed; left: 0; right: 0; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); display: flex; gap: 8px;
@@ -43,10 +44,11 @@
   <button id="btnLog">ログ保存</button>
 </div>
 <div id="start">
-  <h1>変身プロトタイプ v0.1</h1>
-  <p>スマホを立てて置き、全身が映るように2〜3m離れて立ってね。<br>
-     ① 胸の前で両手を合わせて「構え」<br>
-     ②「変身！」と叫ぶ ＋ ③ 片手を斜め上・もう片手を腰に</p>
+  <h1>変身プロトタイプ v0.2</h1>
+  <p>スマホを立てて置き、腰まで映るように2〜3m離れて立ってね。<br>
+     ① 片腕を斜め上にまっすぐ伸ばして「構え」<br>
+     ②「変身！」と叫ぶ<br>
+     ③ 両手を腰の横（ベルトの横）に持ってくる</p>
   <button id="btnStart">はじめる（カメラとマイクを使います）</button>
   <p id="loadMsg"></p>
 </div>
@@ -56,15 +58,22 @@ import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@m
 
 // ===== 調整用パラメータ（実験しながらここを変える） =====
 const CFG = {
-  HOLD_MS: 500,           // 構えをキープする時間
-  WINDOW_MS: 2500,        // 声とポーズの許容時間差（AND判定）
-  READY_TIMEOUT_MS: 8000, // 構えのあと、この時間内に変身しないとリセット
-  EFFECT_MS: 2600,        // 変身演出の長さ
-  DONE_MS: 6000,          // 変身完了状態の長さ
-  MIN_VIS: 0.5,           // 関節の信頼度のしきい値
+  HOLD_MS: 400,            // 構えをキープする時間
+  WINDOW_MS: 3000,         // 声と決めポーズの許容時間差（AND判定）
+  READY_TIMEOUT_MS: 10000, // 構えのあと、この時間内に変身しないとリセット
+  CHARGE_MS: 450,          // 光がベルトに集まる時間
+  EFFECT_MS: 3000,         // 変身演出の長さ
+  DONE_MS: 6000,           // 変身完了状態の長さ
+  MIN_VIS: 0.5,            // 関節の「見えている確かさ」のしきい値
+  MIN_VIS_HIP: 0.3,        // 腰だけは少しゆるめる
+  ARM_UP: 0.3,             // 構え：手首が肩より「肩幅×0.3」以上高い
+  ARM_SIDE: 0.5,           // 構え：手首が肩から横に「肩幅×0.5」以上離れている（斜め）
+  ARM_STRAIGHT_DEG: 130,   // 構え：ひじの角度がこれ以上（腕が伸びている）
+  BELT_CLOSE: 0.9,         // 決め：両手首の距離が「肩幅×0.9」より近い
+  BELT_SIDE: 0.8,          // 決め：両手の位置が、腰の左右の端から「肩幅×0.8」以内
   KEYWORDS: ["変身", "へんしん", "ヘンシン"],
-  COLOR_A: [0, 220, 255],  // 仮のヒーローカラー（シアン）
-  COLOR_B: [255, 200, 40], // 仮のヒーローカラー（ゴールド）
+  COLOR_A: [255, 200, 70],  // ゴールド
+  COLOR_B: [255, 255, 255], // 白
 };
 
 // ===== DOM =====
@@ -77,9 +86,9 @@ const loadMsg = document.getElementById("loadMsg");
 
 // ===== 状態 =====
 let landmarker = null, stream = null, facingMode = "user", mirror = true;
-let lm = null, lastVideoTime = -1, showSkel = true;
-let state = "IDLE", stateAt = 0, guardSince = 0, voiceAt = 0, lastPoseAt = 0;
-let flags = { guard: false, pose: false };
+let lm = null, P = null, lastVideoTime = -1, showSkel = true;
+let state = "IDLE", stateAt = 0, guardSince = 0, readyAt = 0, lastVoiceAt = -1e9, lastBeltAt = 0;
+let G = null, B = null, burst = false;
 let lastTranscript = "", voiceSupported = false, rec = null, actx = null;
 let particles = [], ringAt = -1, ringCenter = null, lastFrame = performance.now();
 let fps = 0, fpsCount = 0, fpsAt = performance.now();
@@ -91,45 +100,78 @@ function log(type, detail = "") {
 function setState(s) { state = s; stateAt = performance.now(); log("state", s); }
 
 // ===== 骨格まわり =====
+// 0:鼻 11/12:左右の肩 13/14:左右のひじ 15/16:左右の手首 23/24:左右の腰（25〜28はひざ・足首）
 const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
-const vis = (p) => p && (p.visibility ?? 1) > CFG.MIN_VIS;
+const vis = (p, th = CFG.MIN_VIS) => !!p && (p.visibility ?? 1) > th;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function angleAt(b, a, c) { // 点bでの角度（a-b-c）を度で返す
+  const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
+  const d = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
+  if (!d) return 0;
+  return Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / d))) * 180 / Math.PI;
+}
 
-// 構え：両手首が胸の前で近づいている
-function isGuard(L) {
-  const ls = L[11], rs = L[12], lw = L[15], rw = L[16], lh = L[23], rh = L[24];
-  if (![ls, rs, lw, rw, lh, rh].every(vis)) return false;
+// 構え：片腕を斜め上にまっすぐ伸ばす（左右どちらの腕でもOK）
+function armCheck(Q, sh, el, wr) {
+  const S = Q[sh], E = Q[el], W = Q[wr];
+  if (![S, E, W].every((p) => vis(p))) return null;
+  const sw = dist(Q[11], Q[12]);
+  const deg = angleAt(E, S, W);
+  const r = {
+    high: W.y < S.y - CFG.ARM_UP * sw,              // 手首が肩より上
+    side: Math.abs(W.x - S.x) > CFG.ARM_SIDE * sw,  // 真上ではなく斜め
+    straight: deg > CFG.ARM_STRAIGHT_DEG,           // ひじが伸びている
+    deg, wr,
+  };
+  r.ok = r.high && r.side && r.straight;
+  r.score = r.high + r.side + r.straight;
+  return r;
+}
+function checkGuard(Q) {
+  if (!vis(Q[11]) || !vis(Q[12])) return null;
+  const c = [armCheck(Q, 11, 13, 15), armCheck(Q, 12, 14, 16)].filter(Boolean);
+  if (!c.length) return null;
+  return c.sort((x, y) => (y.ok - x.ok) || (y.score - x.score))[0];
+}
+
+// 決め：両手を腰の横（ベルトの横）に持ってくる
+function checkBelt(Q) {
+  const ls = Q[11], rs = Q[12], lw = Q[15], rw = Q[16], lh = Q[23], rh = Q[24];
+  if (![ls, rs, lw, rw].every((p) => vis(p))) return null;
+  if (![lh, rh].every((p) => vis(p, CFG.MIN_VIS_HIP))) return { noHip: true, ok: false };
   const sw = dist(ls, rs);
-  const chestY = (ls.y + rs.y) / 2, hipY = (lh.y + rh.y) / 2, cx = (ls.x + rs.x) / 2;
+  const shY = (ls.y + rs.y) / 2, hipY = (lh.y + rh.y) / 2, torso = hipY - shY;
   const mx = (lw.x + rw.x) / 2, my = (lw.y + rw.y) / 2;
-  return dist(lw, rw) < sw * 0.6 && Math.abs(mx - cx) < sw * 0.6 &&
-         my > chestY - sw * 0.1 && my < chestY + (hipY - chestY) * 0.7;
+  const r = {
+    close: dist(lw, rw) < CFG.BELT_CLOSE * sw,                         // 両手が近い
+    height: my > shY + 0.5 * torso && my < hipY + 0.15 * torso,        // 腰（ベルト）の高さ
+    side: mx > Math.min(lh.x, rh.x) - CFG.BELT_SIDE * sw &&
+          mx < Math.max(lh.x, rh.x) + CFG.BELT_SIDE * sw,              // 腰の横あたり
+  };
+  r.ok = r.close && r.height && r.side;
+  return r;
 }
 
-// 決めポーズ（仮）：片手を頭より上の斜めに、もう片手を腰に
-function isHenshinPose(L) {
-  const nose = L[0], ls = L[11], rs = L[12], lw = L[15], rw = L[16], lh = L[23], rh = L[24];
-  if (![nose, ls, rs, lw, rw, lh, rh].every(vis)) return false;
-  const sw = dist(ls, rs);
-  const up = (w, sh) => w.y < nose.y && Math.abs(w.x - sh.x) > sw * 0.4;
-  const atHip = (w, hip) => dist(w, hip) < sw * 0.7;
-  return (up(lw, ls) && atHip(rw, rh)) || (up(rw, rs) && atHip(lw, lh));
-}
-
-// ===== 状態遷移（構え → 声＋ポーズ → 変身） =====
+// ===== 状態遷移（構え →「変身！」＋決め → 変身） =====
 function update(now) {
-  flags.guard = !!lm && isGuard(lm);
-  flags.pose = !!lm && isHenshinPose(lm);
+  G = P ? checkGuard(P) : null;
+  B = P ? checkBelt(P) : null;
   if (state === "IDLE") {
-    if (flags.guard) {
+    if (G && G.ok) {
       if (!guardSince) guardSince = now;
-      if (now - guardSince > CFG.HOLD_MS) { voiceAt = 0; lastPoseAt = 0; setState("READY"); }
+      if (now - guardSince > CFG.HOLD_MS) {
+        readyAt = now; lastBeltAt = 0;
+        log("guard", G.wr === 15 ? "left" : "right");
+        setState("READY");
+      }
     } else guardSince = 0;
   } else if (state === "READY") {
-    if (flags.pose) { if (!lastPoseAt) log("pose"); lastPoseAt = now; }
-    if (voiceAt && lastPoseAt && Math.abs(voiceAt - lastPoseAt) < CFG.WINDOW_MS) trigger(now);
+    if (B && B.ok) { if (!lastBeltAt) log("belt"); lastBeltAt = now; }
+    const voiceOk = lastVoiceAt > readyAt - 1500; // 構えの直前〜構えのあとに叫んだ声を有効にする
+    if (voiceOk && lastBeltAt && Math.abs(lastVoiceAt - lastBeltAt) < CFG.WINDOW_MS) trigger(now);
     else if (now - stateAt > CFG.READY_TIMEOUT_MS) { log("timeout"); guardSince = 0; setState("IDLE"); }
   } else if (state === "TRANSFORM") {
+    if (!burst && now - stateAt > CFG.CHARGE_MS) startBurst(now);
     if (now - stateAt > CFG.EFFECT_MS) setState("DONE");
   } else if (state === "DONE") {
     if (now - stateAt > CFG.DONE_MS) { guardSince = 0; setState("IDLE"); }
@@ -137,106 +179,154 @@ function update(now) {
 }
 
 function onVoice(src) {
-  if (state !== "READY") return;
-  if (!voiceAt) log("voice", src);
-  voiceAt = performance.now();
+  const now = performance.now();
+  if (now - lastVoiceAt > 800) log("voice", src);
+  lastVoiceAt = now;
 }
 
-function bodyCenter(vw, vh) {
-  if (!lm) return { x: vw / 2, y: vh / 2 };
-  const ids = [11, 12, 23, 24];
-  return { x: ids.reduce((s, i) => s + lm[i].x, 0) / 4 * vw, y: ids.reduce((s, i) => s + lm[i].y, 0) / 4 * vh };
+// ===== エフェクト（光：金・白） =====
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const rand = (a, b) => a + Math.random() * (b - a);
+const px = (i, vw, vh) => ({ x: lm[i].x * vw, y: lm[i].y * vh });
+
+function beltPoint(vw, vh) {
+  if (!lm) return { x: vw / 2, y: vh * 0.6 };
+  const ls = px(11, vw, vh), rs = px(12, vw, vh);
+  const shY = (ls.y + rs.y) / 2, sw = Math.hypot(ls.x - rs.x, ls.y - rs.y);
+  if (vis(lm[23], CFG.MIN_VIS_HIP) && vis(lm[24], CFG.MIN_VIS_HIP)) {
+    const lh = px(23, vw, vh), rh = px(24, vw, vh), hipY = (lh.y + rh.y) / 2;
+    return { x: (lh.x + rh.x) / 2, y: hipY - (hipY - shY) * 0.12 };
+  }
+  return { x: (ls.x + rs.x) / 2, y: shY + sw * 1.3 };
 }
 
 function trigger(now) {
   setState("TRANSFORM");
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const c = bodyCenter(vw, vh);
-  ringAt = now; ringCenter = c;
-  for (let i = 0; i < 180; i++) {
-    const a = Math.random() * Math.PI * 2, sp = vw * (0.003 + Math.random() * 0.014);
-    particles.push({ x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0,
-      max: 600 + Math.random() * 900, size: vw * (0.003 + Math.random() * 0.007), gold: Math.random() < 0.4 });
+  burst = false;
+  const vw = video.videoWidth, vh = video.videoHeight, c = beltPoint(vw, vh);
+  for (let i = 0; i < 90; i++) { // 光がベルトに集まる
+    const a = rand(0, Math.PI * 2), r = vw * rand(0.16, 0.3);
+    particles.push({ kind: "in", sx: c.x + Math.cos(a) * r, sy: c.y + Math.sin(a) * r, tx: c.x, ty: c.y,
+      x: 0, y: 0, life: 0, max: CFG.CHARGE_MS * rand(0.8, 1), size: vw * rand(0.002, 0.004), gold: Math.random() < 0.5 });
   }
   playHenshinSound();
+}
+
+function startBurst(now) {
+  burst = true;
+  const vw = video.videoWidth, vh = video.videoHeight, c = beltPoint(vw, vh);
+  ringAt = now; ringCenter = c;
+  for (let i = 0; i < 140; i++) { // 光がはじける
+    const a = rand(0, Math.PI * 2), sp = vw * rand(0.003, 0.014);
+    particles.push({ kind: "burst", x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, drag: 0.975,
+      life: 0, max: rand(600, 1400), size: vw * rand(0.002, 0.005), gold: Math.random() < 0.6 });
+  }
+}
+
+function spark(x, y, vw, max = rand(500, 1000), up = 1) {
+  particles.push({ kind: "spark", x, y, vx: vw * rand(-0.0008, 0.0008), vy: -vw * rand(0.0004, 0.0016) * up, drag: 0.995,
+    life: 0, max, size: vw * rand(0.002, 0.0045), gold: Math.random() < 0.6, ph: rand(0, 6) });
+}
+
+function randomBodyPoint(vw, vh) {
+  const ok = BONES.filter(([a, b]) => vis(lm[a]) && vis(lm[b]));
+  if (!ok.length) return null;
+  const [a, b] = ok[Math.floor(Math.random() * ok.length)], t = Math.random();
+  const p = px(a, vw, vh), q = px(b, vw, vh);
+  return { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
 }
 
 // ===== 効果音（WebAudioで合成したオリジナル音） =====
 function playHenshinSound() {
   if (!actx) return;
-  const t = actx.currentTime;
-  const o = actx.createOscillator(), g = actx.createGain();
-  o.type = "sawtooth";
-  o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(1300, t + 0.8);
-  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
-  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 1.2);
-  const o2 = actx.createOscillator(), g2 = actx.createGain();
+  const t = actx.currentTime, ch = CFG.CHARGE_MS / 1000;
+  const o = actx.createOscillator(), g = actx.createGain(); // 集まる音（上がっていく音）
+  o.type = "sine";
+  o.frequency.setValueAtTime(300, t); o.frequency.exponentialRampToValueAtTime(1400, t + ch);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.15, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + ch + 0.05);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + ch + 0.1);
+  [880, 1318.5, 1760, 2637].forEach((f, i) => { // はじける音（きらめく和音）
+    const oo = actx.createOscillator(), gg = actx.createGain();
+    oo.type = "sine"; oo.frequency.setValueAtTime(f, t + ch);
+    gg.gain.setValueAtTime(0.0001, t + ch); gg.gain.exponentialRampToValueAtTime(0.12 / (i + 1) + 0.04, t + ch + 0.02);
+    gg.gain.exponentialRampToValueAtTime(0.0001, t + ch + 1.6 + i * 0.2);
+    oo.connect(gg).connect(actx.destination); oo.start(t + ch); oo.stop(t + ch + 2.2);
+  });
+  const o2 = actx.createOscillator(), g2 = actx.createGain(); // 低い衝撃音
   o2.type = "triangle";
-  o2.frequency.setValueAtTime(110, t + 0.8); o2.frequency.exponentialRampToValueAtTime(40, t + 1.7);
-  g2.gain.setValueAtTime(0.0001, t + 0.8); g2.gain.exponentialRampToValueAtTime(0.5, t + 0.83); g2.gain.exponentialRampToValueAtTime(0.0001, t + 1.9);
-  o2.connect(g2).connect(actx.destination); o2.start(t + 0.8); o2.stop(t + 2.0);
+  o2.frequency.setValueAtTime(120, t + ch); o2.frequency.exponentialRampToValueAtTime(45, t + ch + 0.6);
+  g2.gain.setValueAtTime(0.0001, t + ch); g2.gain.exponentialRampToValueAtTime(0.4, t + ch + 0.02); g2.gain.exponentialRampToValueAtTime(0.0001, t + ch + 0.8);
+  o2.connect(g2).connect(actx.destination); o2.start(t + ch); o2.stop(t + ch + 0.9);
 }
 
 // ===== 描画 =====
-const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-
-function drawSkeleton(P, vw) {
+function drawSkeleton(vw, vh) {
   ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = vw * 0.004; ctx.lineCap = "round";
   for (const [a, b] of BONES) {
     if (!vis(lm[a]) || !vis(lm[b])) continue;
-    const p = P(a), q = P(b);
+    const p = px(a, vw, vh), q = px(b, vw, vh);
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
   }
-  ctx.fillStyle = rgba(CFG.COLOR_B, 0.95);
+  ctx.fillStyle = rgba(CFG.COLOR_A, 0.95);
   for (const i of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
     if (!vis(lm[i])) continue;
-    const p = P(i); ctx.beginPath(); ctx.arc(p.x, p.y, vw * 0.006, 0, Math.PI * 2); ctx.fill();
+    const p = px(i, vw, vh); ctx.beginPath(); ctx.arc(p.x, p.y, vw * 0.006, 0, Math.PI * 2); ctx.fill();
   }
 }
 
-function drawReadyAura(P, now, vw, vh) {
-  const c = bodyCenter(vw, vh), pulse = 0.5 + 0.5 * Math.sin(now / 150);
-  ctx.save(); ctx.globalCompositeOperation = "lighter";
-  ctx.strokeStyle = rgba(CFG.COLOR_A, 0.35 + 0.4 * pulse); ctx.lineWidth = vw * 0.008;
-  ctx.beginPath(); ctx.arc(c.x, c.y, vw * (0.12 + 0.02 * pulse), 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
-}
-
-function drawArmorGlow(P, now, vw) {
-  const p = state === "TRANSFORM" ? Math.min(1, (now - stateAt) / 1200) : 1;
-  const n = Math.ceil(p * BONES.length), pulse = 0.75 + 0.25 * Math.sin(now / 200);
-  ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
-  for (let k = 0; k < n; k++) {
-    const [a, b] = BONES[k];
-    if (!vis(lm[a]) || !vis(lm[b])) continue;
-    const s = P(a), e = P(b);
-    for (const [w, col, al] of [[0.05, CFG.COLOR_A, 0.18], [0.022, CFG.COLOR_A, 0.45], [0.008, CFG.COLOR_B, 0.9]]) {
-      ctx.strokeStyle = rgba(col, al * pulse); ctx.lineWidth = vw * w;
+function glowBody(vw, vh, alpha) {
+  const ls = px(11, vw, vh), rs = px(12, vw, vh), sw = Math.hypot(ls.x - rs.x, ls.y - rs.y);
+  ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (const [w, col, al] of [[0.06, CFG.COLOR_A, 0.16], [0.025, CFG.COLOR_A, 0.45], [0.008, CFG.COLOR_B, 0.95]]) {
+    ctx.strokeStyle = rgba(col, al * alpha); ctx.lineWidth = vw * w;
+    for (const [a, b] of BONES) {
+      if (!vis(lm[a]) || !vis(lm[b])) continue;
+      const s = px(a, vw, vh), e = px(b, vw, vh);
       ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
     }
+    if (vis(lm[0])) { const n = px(0, vw, vh); ctx.beginPath(); ctx.arc(n.x, n.y - sw * 0.05, sw * 0.42, 0, Math.PI * 2); ctx.stroke(); }
   }
   ctx.restore();
-  if (state === "DONE" && Math.random() < 0.4) { // 変身後のオーラの粒
-    const c = bodyCenter(video.videoWidth, video.videoHeight);
-    particles.push({ x: c.x + (Math.random() - 0.5) * vw * 0.2, y: c.y + vw * 0.1, vx: 0, vy: -vw * 0.003,
-      life: 0, max: 900, size: vw * 0.004, gold: Math.random() < 0.5 });
-  }
 }
 
-function drawEffects(now, dt, vw) {
+function drawBeltGlow(vw, vh, level) {
+  const c = beltPoint(vw, vh);
   ctx.save(); ctx.globalCompositeOperation = "lighter";
-  if (ringAt >= 0) {
-    const t = (now - ringAt) / 700;
-    if (t < 1) {
-      ctx.strokeStyle = rgba(CFG.COLOR_B, 1 - t); ctx.lineWidth = vw * 0.02 * (1 - t) + 1;
-      ctx.beginPath(); ctx.arc(ringCenter.x, ringCenter.y, vw * 0.6 * t, 0, Math.PI * 2); ctx.stroke();
-    } else ringAt = -1;
+  for (const [r, al] of [[0.06, 0.15], [0.035, 0.35], [0.015, 0.9]]) {
+    ctx.fillStyle = rgba(r < 0.02 ? CFG.COLOR_B : CFG.COLOR_A, al * level);
+    ctx.beginPath(); ctx.arc(c.x, c.y, vw * r * (0.6 + 0.4 * level), 0, Math.PI * 2); ctx.fill();
   }
+  ctx.restore();
+}
+
+function drawParticles(dt, vw) {
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  if (particles.length > 700) particles.splice(0, particles.length - 700);
   particles = particles.filter((q) => (q.life += dt) < q.max);
   for (const q of particles) {
-    q.x += q.vx * dt / 16; q.y += q.vy * dt / 16; q.vx *= 0.985; q.vy *= 0.985;
-    ctx.fillStyle = rgba(q.gold ? CFG.COLOR_B : CFG.COLOR_A, 1 - q.life / q.max);
+    const f = 1 - q.life / q.max;
+    if (q.kind === "in") {
+      const k = Math.min(1, q.life / q.max), e = k * k;
+      q.x = q.sx + (q.tx - q.sx) * e; q.y = q.sy + (q.ty - q.sy) * e;
+    } else {
+      q.x += q.vx * dt / 16; q.y += q.vy * dt / 16; q.vx *= q.drag; q.vy *= q.drag;
+    }
+    const tw = q.kind === "spark" ? 0.55 + 0.45 * Math.sin(q.life / 45 + q.ph) : 1;
+    const a = (q.kind === "in" ? 0.4 + 0.6 * (q.life / q.max) : f) * tw;
+    ctx.fillStyle = rgba(q.gold ? CFG.COLOR_A : CFG.COLOR_B, a);
     ctx.beginPath(); ctx.arc(q.x, q.y, q.size, 0, Math.PI * 2); ctx.fill();
+    if (q.kind === "spark" && tw > 0.85) { // きらめき（十字の光）
+      ctx.strokeStyle = rgba(CFG.COLOR_B, a * 0.8); ctx.lineWidth = q.size * 0.5;
+      ctx.beginPath(); ctx.moveTo(q.x - q.size * 3, q.y); ctx.lineTo(q.x + q.size * 3, q.y);
+      ctx.moveTo(q.x, q.y - q.size * 3); ctx.lineTo(q.x, q.y + q.size * 3); ctx.stroke();
+    }
+  }
+  if (ringAt >= 0) {
+    const t = (performance.now() - ringAt) / 700;
+    if (t < 1) {
+      ctx.strokeStyle = rgba(CFG.COLOR_A, 1 - t); ctx.lineWidth = vw * 0.02 * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(ringCenter.x, ringCenter.y, vw * 0.6 * t, 0, Math.PI * 2); ctx.stroke();
+    } else ringAt = -1;
   }
   ctx.restore();
 }
@@ -248,26 +338,41 @@ function draw(now, dt) {
   const s = Math.max(cw / vw, ch / vh), dx = (cw - vw * s) / 2, dy = (ch - vh * s) / 2;
   if (mirror) ctx.setTransform(-s, 0, 0, s, cw - dx, dy); else ctx.setTransform(s, 0, 0, s, dx, dy);
   ctx.drawImage(video, 0, 0, vw, vh);
+  const t = now - stateAt;
   if (lm) {
-    const P = (i) => ({ x: lm[i].x * vw, y: lm[i].y * vh });
-    if (showSkel) drawSkeleton(P, vw);
-    if (state === "READY") drawReadyAura(P, now, vw, vh);
-    if (state === "TRANSFORM" || state === "DONE") drawArmorGlow(P, now, vw);
+    if (showSkel) drawSkeleton(vw, vh);
+    if (state === "READY") { // 構えたら手先が光る・ベルトが待機の光
+      for (const i of [15, 16]) if (vis(lm[i]) && Math.random() < 0.5) { const p = px(i, vw, vh); spark(p.x, p.y, vw, rand(400, 800)); }
+      drawBeltGlow(vw, vh, 0.35 + 0.25 * Math.sin(now / 160));
+    }
+    if (state === "TRANSFORM") {
+      drawBeltGlow(vw, vh, Math.min(1, t / CFG.CHARGE_MS));
+      if (t > CFG.CHARGE_MS) glowBody(vw, vh, Math.min(1, (t - CFG.CHARGE_MS) / 450));
+      if (t > CFG.CHARGE_MS && Math.random() < 0.85) { const p = randomBodyPoint(vw, vh); if (p) spark(p.x, p.y, vw); }
+    }
+    if (state === "DONE") {
+      glowBody(vw, vh, 0.6 + 0.25 * Math.sin(now / 220));
+      if (Math.random() < 0.35) { const p = randomBodyPoint(vw, vh); if (p) spark(p.x, p.y, vw, rand(700, 1300)); }
+    }
   }
-  drawEffects(now, dt, vw);
+  drawParticles(dt, vw);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (state === "TRANSFORM" && now - stateAt < 350) {
-    ctx.fillStyle = `rgba(255,255,255,${0.8 * (1 - (now - stateAt) / 350)})`; ctx.fillRect(0, 0, cw, ch);
+  if (state === "TRANSFORM" && t > CFG.CHARGE_MS && t < CFG.CHARGE_MS + 350) {
+    ctx.fillStyle = `rgba(255,250,235,${0.85 * (1 - (t - CFG.CHARGE_MS) / 350)})`; ctx.fillRect(0, 0, cw, ch);
   }
 }
 
-function updateText() {
-  const mark = (b) => (b ? "○" : "×");
-  const voiceText = voiceSupported ? (lastTranscript || "-") : "非対応（タップで代用）";
-  hud.textContent = `状態: ${state}\n構え: ${mark(flags.guard)}  決めポーズ: ${mark(flags.pose)}\n声: ${voiceText}\nFPS: ${fps}`;
-  if (!lm) guide.textContent = "全身が映るように立ってね";
-  else if (state === "IDLE") guide.textContent = "① 胸の前で両手を合わせて構えよう";
-  else if (state === "READY") guide.textContent = `「変身！」${voiceAt ? "✓" : ""} ＋ 決めポーズ${lastPoseAt ? "✓" : ""}`;
+function updateText(now) {
+  const m = (b) => (b ? "○" : "×");
+  const gText = G ? `腕の高さ${m(G.high)} 斜め${m(G.side)} 伸び${m(G.straight)}（${Math.round(G.deg)}°）` : "腕が見えていない";
+  const bText = !B ? "手が見えていない" : B.noHip ? "腰が見えていない" : `両手の近さ${m(B.close)} 腰の高さ${m(B.height)} 横の位置${m(B.side)}`;
+  const vText = voiceSupported ? (lastTranscript || "-") : "非対応（タップで代用）";
+  hud.textContent = `状態: ${state}\n構え: ${gText}\n決め: ${bText}\n声: ${vText}\nFPS: ${fps}`;
+  const voiceOk = lastVoiceAt > readyAt - 1500;
+  if (!lm) guide.textContent = "腰まで映るように立ってね";
+  else if (state === "IDLE") guide.textContent = "① 片腕を斜め上にまっすぐ伸ばして構えよう";
+  else if (state === "READY") guide.textContent = B && B.noHip ? "腰まで映るように少し下がってね"
+    : `②「変身！」${voiceOk ? "✓" : ""}　③ 両手を腰の横へ${lastBeltAt ? "✓" : ""}`;
   else if (state === "TRANSFORM") guide.textContent = "";
   else if (state === "DONE") guide.textContent = "変身完了！";
 }
@@ -279,10 +384,13 @@ function loop() {
     lastVideoTime = video.currentTime;
     const res = landmarker.detectForVideo(video, now);
     lm = res.landmarks && res.landmarks[0] ? res.landmarks[0] : null;
+    // 横と縦の比率をそろえた座標（判定用）。そろえないと角度や距離がゆがむ
+    const A = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 1;
+    P = lm ? lm.map((p) => ({ x: p.x * A, y: p.y, visibility: p.visibility })) : null;
     fpsCount++;
   }
   if (now - fpsAt > 1000) { fps = fpsCount; fpsCount = 0; fpsAt = now; }
-  update(now); draw(now, dt); updateText();
+  update(now); draw(now, dt); updateText(now);
   requestAnimationFrame(loop);
 }
 
