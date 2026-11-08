@@ -4,7 +4,7 @@
 スマートフォンやPCのブラウザで、アプリをインストールせずに動きます。
 
 - 作成：柳川甲斐（法政大学 デザイン工学部 システムデザイン学科 スマートマシンデザイン研究室）
-- 公開ページ：https://ユーザー名.github.io/リポジトリ名/ ← 自分のURLに書き換える
+- 公開ページ：[https://ユーザー名.github.io/リポジトリ名/ ← 自分のURLに書き換える](https://github.com/kaiyanagawa7z-beep/henshin-prototype.git)
 
 ---
 
